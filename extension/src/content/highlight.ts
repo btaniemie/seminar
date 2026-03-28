@@ -8,26 +8,14 @@
 
 import type { RangeData } from '../types'
 
-// ── Color palette ─────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-const COLORS = [
-  'rgba(250, 204,  21, 0.45)', // yellow
-  'rgba( 74, 222, 128, 0.45)', // green
-  'rgba( 96, 165, 250, 0.45)', // blue
-  'rgba(251, 113, 133, 0.45)', // red
-  'rgba(192, 132, 252, 0.45)', // purple
-  'rgba( 45, 212, 191, 0.45)', // teal
-]
-
-const clientColorIdx = new Map<string, number>()
-let nextIdx = 0
-
-function colorFor(clientId: string): string {
-  if (!clientColorIdx.has(clientId)) {
-    clientColorIdx.set(clientId, nextIdx % COLORS.length)
-    nextIdx++
-  }
-  return COLORS[clientColorIdx.get(clientId)!]
+/** Convert a #RRGGBB hex color to rgba(...) with the given alpha. */
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r},${g},${b},${alpha})`
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -48,15 +36,26 @@ export function serializeSelection(sel: Selection): RangeData | null {
   }
 }
 
-/** Overlay a peer's highlight onto the page. Replaces any previous overlay for that client. */
-export function applyHighlight(clientId: string, data: RangeData): void {
+/**
+ * Overlay a peer's highlight onto the page with an initials label.
+ * Replaces any previous overlay for that client.
+ *
+ * @param initials - 1–2 uppercase letters shown in a pill above the selection
+ * @param color    - hex color (#RRGGBB) matching the user's presence avatar
+ */
+export function applyHighlight(
+  clientId: string,
+  data: RangeData,
+  initials: string,
+  color: string,
+): void {
   clearHighlight(clientId) // remove stale overlay first
 
   const range = rangeFrom(data)
   if (!range) return
 
-  const color = colorFor(clientId)
-  const rects = Array.from(range.getClientRects())
+  const bgColor = hexToRgba(color, 0.4)
+  const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0)
   if (rects.length === 0) return
 
   const container = document.createElement('div')
@@ -66,8 +65,31 @@ export function applyHighlight(clientId: string, data: RangeData): void {
   const scrollX = window.scrollX
   const scrollY = window.scrollY
 
+  // Name label — sits just above the first line of the selection
+  if (initials) {
+    const label = document.createElement('div')
+    const firstRect = rects[0]
+    label.style.cssText = [
+      'position:absolute',
+      `top:${firstRect.top + scrollY - 19}px`,
+      `left:${firstRect.left + scrollX}px`,
+      `background-color:${color}`,
+      'color:#18181B',
+      'font-family:system-ui,-apple-system,sans-serif',
+      'font-size:10px',
+      'font-weight:700',
+      'padding:1px 6px',
+      'border-radius:3px',
+      'line-height:16px',
+      'pointer-events:none',
+      'white-space:nowrap',
+      'letter-spacing:0.04em',
+    ].join(';')
+    label.textContent = initials
+    container.appendChild(label)
+  }
+
   for (const rect of rects) {
-    if (rect.width === 0 || rect.height === 0) continue
     const div = document.createElement('div')
     div.style.cssText = [
       'position:absolute',
@@ -75,7 +97,7 @@ export function applyHighlight(clientId: string, data: RangeData): void {
       `left:${rect.left + scrollX}px`,
       `width:${rect.width}px`,
       `height:${rect.height}px`,
-      `background-color:${color}`,
+      `background-color:${bgColor}`,
       'mix-blend-mode:multiply', // blends over text like a real highlighter
       'border-radius:2px',
       'pointer-events:none',

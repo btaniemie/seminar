@@ -14,6 +14,8 @@ interface HighlightEntry {
   clientId: string
   isSelf: boolean
   text: string
+  initials: string
+  color: string
 }
 
 interface ChatMsg {
@@ -43,6 +45,11 @@ export function Sidebar() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   // Keep a ref to highlights so sendMessage can read the latest without a stale closure
   const highlightsRef = useRef<HighlightEntry[]>([])
+  // Always-current lookup of clientId → presence info (avoids stale closure issues)
+  const participantMapRef = useRef<Map<string, PresenceUser>>(new Map())
+  // Own initials/color stored as refs so highlight handlers can read them without stale closures
+  const myInitialsRef = useRef('')
+  const myColorRef = useRef('')
 
   // Auto-scroll chat to bottom on new messages / streaming
   useEffect(() => {
@@ -81,21 +88,36 @@ export function Sidebar() {
         if (msg.type === 'hello') {
           setClientId(msg.clientId)
           clientIdRef.current = msg.clientId
-          if (msg.initials) setMyInitials(msg.initials)
-          if (msg.color) setMyColor(msg.color)
+          if (msg.initials) {
+            setMyInitials(msg.initials)
+            myInitialsRef.current = msg.initials
+          }
+          if (msg.color) {
+            setMyColor(msg.color)
+            myColorRef.current = msg.color
+          }
 
         } else if (msg.type === 'presence') {
-          setParticipants(msg.payload as PresenceUser[])
+          const users = msg.payload as PresenceUser[]
+          setParticipants(users)
+          // Keep the ref in sync for use in non-React callbacks
+          const map = new Map<string, PresenceUser>()
+          users.forEach(u => map.set(u.clientId, u))
+          participantMapRef.current = map
 
         } else if (msg.type === 'highlight') {
           const p = msg.payload as HighlightPayload
-          const entry: HighlightEntry = { clientId: msg.clientId, isSelf, text: p.text }
+          // Look up presence info so the feed and overlay use consistent colors/names
+          const pUser = isSelf
+            ? { clientId: msg.clientId, initials: myInitialsRef.current || msg.clientId.slice(0, 2).toUpperCase(), color: myColorRef.current || '#A8A29E' }
+            : (participantMapRef.current.get(msg.clientId) ?? { clientId: msg.clientId, initials: msg.clientId.slice(0, 2).toUpperCase(), color: '#A8A29E' })
+          const entry: HighlightEntry = { clientId: msg.clientId, isSelf, text: p.text, initials: pUser.initials, color: pUser.color }
           setHighlights(prev => {
             const next = [entry, ...prev].slice(0, 10)
             highlightsRef.current = next
             return next
           })
-          if (!isSelf) applyHighlight(msg.clientId, p)
+          if (!isSelf) applyHighlight(msg.clientId, p, pUser.initials, pUser.color)
 
         } else if (msg.type === 'chat') {
           // Only add peer messages — our own are already in local state
@@ -294,8 +316,9 @@ export function Sidebar() {
         <div className="highlights-strip">
           {highlights.slice(0, 3).map((h, i) => (
             <div key={i} className="hl-item">
-              <span className={`hl-who ${h.isSelf ? 'hl-who--self' : ''}`}>
-                {h.isSelf ? 'You' : h.clientId.slice(0, 4)}
+              <span className="hl-who">
+                <span className="hl-dot" style={{ backgroundColor: h.color }} />
+                {h.isSelf ? 'You' : h.initials}
               </span>
               <span className="hl-quote">
                 {h.text.length > 80 ? h.text.slice(0, 80) + '…' : h.text}
@@ -314,10 +337,16 @@ export function Sidebar() {
         )}
         {chatMessages.map(msg => (
           <div key={msg.id} className={`message message--${msg.role}`}>
-            <span className="msg-label">
+            <span className="msg-label" style={
+              msg.role === 'user' && msg.clientId && msg.clientId !== clientId
+                ? { color: participantMapRef.current.get(msg.clientId)?.color }
+                : undefined
+            }>
               {msg.role === 'assistant'
                 ? 'Seminar'
-                : msg.clientId === clientId ? 'You' : (msg.clientId?.slice(0, 4) ?? 'Peer')}
+                : msg.clientId === clientId
+                  ? 'You'
+                  : (participantMapRef.current.get(msg.clientId ?? '')?.initials ?? 'Peer')}
             </span>
             <p className="msg-content">{msg.content}</p>
           </div>

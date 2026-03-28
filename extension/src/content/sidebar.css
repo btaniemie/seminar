@@ -162,13 +162,22 @@
 }
 .hl-item { display: flex; flex-direction: column; gap: 2px; }
 .hl-who {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: .07em;
   text-transform: uppercase;
-  color: #A8A29E;
+  color: #78716C;
 }
-.hl-who--self { color: #D97706; }
+/* Colored dot that matches the user's presence avatar */
+.hl-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 .hl-quote {
   font-family: ui-serif, Georgia, serif;
   font-size: 12px;
