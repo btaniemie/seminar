@@ -2,15 +2,20 @@ import type { BgRequest, BgResponse } from '../types'
 
 const API_BASE = 'http://localhost:8080'
 
-// Respond to GET_SESSION from the content script.
-// Returns an existing session ID from storage, or creates a new one via REST.
 chrome.runtime.onMessage.addListener(
   (msg: BgRequest, _sender, sendResponse: (r: BgResponse) => void) => {
     if (msg.type === 'GET_SESSION') {
       getOrCreateSession().then(sendResponse).catch(() =>
         sendResponse({ error: 'failed to get session' })
       )
-      return true // keep the message channel open for async response
+      return true
+    }
+
+    if (msg.type === 'JOIN_SESSION') {
+      joinSession(msg.sessionId).then(sendResponse).catch(() =>
+        sendResponse({ error: 'failed to join session' })
+      )
+      return true
     }
   }
 )
@@ -27,4 +32,15 @@ async function getOrCreateSession(): Promise<BgResponse> {
   const data = (await res.json()) as { sessionId: string }
   await chrome.storage.session.set({ sessionId: data.sessionId })
   return { sessionId: data.sessionId }
+}
+
+// Validate that a session exists on the server, then store and return it.
+// The URL parameter always wins over whatever was previously stored — the
+// user explicitly followed a join link, so that intent takes priority.
+async function joinSession(sessionId: string): Promise<BgResponse> {
+  const res = await fetch(`${API_BASE}/api/session/${sessionId}`)
+  if (!res.ok) throw new Error(`session ${sessionId} not found`)
+
+  await chrome.storage.session.set({ sessionId })
+  return { sessionId }
 }

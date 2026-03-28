@@ -5,11 +5,17 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/seminar/backend/handlers"
 	"github.com/seminar/backend/hub"
 )
 
 func main() {
+	// Load .env if present — silently ignored in production where env vars are set directly
+	if err := godotenv.Load(); err == nil {
+		log.Println("loaded .env")
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -19,12 +25,14 @@ func main() {
 
 	sessionHandler := handlers.NewSessionHandler(h)
 	wsHandler := handlers.NewWSHandler(h)
+	chatHandler := handlers.NewChatHandler()
 
 	mux := http.NewServeMux()
 
 	// REST endpoints
 	mux.HandleFunc("POST /api/session", sessionHandler.CreateSession)
 	mux.HandleFunc("GET /api/session/{id}", sessionHandler.GetSession)
+	mux.HandleFunc("POST /api/chat", chatHandler.Chat)
 
 	// WebSocket endpoint
 	mux.HandleFunc("GET /ws", wsHandler.ServeWS)

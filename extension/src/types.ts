@@ -28,10 +28,16 @@ export interface HighlightPayload extends RangeData {
   url: string
 }
 
+export interface ChatPayload {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 // ── Background ↔ Content messages ────────────────────────────────────────────
 
 export type BgRequest =
   | { type: 'GET_SESSION' }
+  | { type: 'JOIN_SESSION'; sessionId: string }
 
 export type BgResponse =
   | { sessionId: string }
