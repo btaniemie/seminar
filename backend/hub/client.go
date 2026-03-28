@@ -80,6 +80,16 @@ func (c *Client) ReadPump() {
 		env.ClientID = c.ID
 		env.SessionID = c.session.id
 
+		// Record highlights in the session buffer so /api/chat can reference them.
+		if env.Type == "highlight" {
+			var hp struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(env.Payload, &hp) == nil && hp.Text != "" {
+				c.session.AddHighlight(c.ID, c.Initials, hp.Text)
+			}
+		}
+
 		stamped, err := json.Marshal(env)
 		if err != nil {
 			log.Printf("[client %s] marshal error: %v", c.ID, err)

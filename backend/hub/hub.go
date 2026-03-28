@@ -38,6 +38,14 @@ func (h *Hub) Exists(sessionID string) bool {
 	return ok
 }
 
+// Get returns the session for the given ID, or nil if it does not exist.
+// Unlike GetOrCreate, this never creates a new session.
+func (h *Hub) Get(sessionID string) *Session {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.sessions[sessionID]
+}
+
 // remove is called by a session when its last client disconnects.
 func (h *Hub) remove(sessionID string) {
 	h.mu.Lock()

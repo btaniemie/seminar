@@ -13,6 +13,13 @@ type PresenceUser struct {
 	Color    string `json:"color"`
 }
 
+// HighlightEntry records a single text selection for the session's rolling buffer.
+type HighlightEntry struct {
+	ClientID string `json:"clientId"`
+	Initials string `json:"initials"`
+	Text     string `json:"text"`
+}
+
 var presenceColors = []string{
 	"#FACC15", // yellow
 	"#4ADE80", // green
@@ -22,6 +29,8 @@ var presenceColors = []string{
 	"#2DD4BF", // teal
 }
 
+const maxHighlightBuf = 10
+
 // Session is a room that broadcasts messages to all connected clients.
 type Session struct {
 	id           string
@@ -30,7 +39,8 @@ type Session struct {
 	broadcast    chan []byte
 	join         chan *Client
 	leave        chan *Client
-	nextColorIdx int // guarded by mu; incremented on each client join
+	nextColorIdx int              // guarded by mu; incremented on each client join
+	highlightBuf []HighlightEntry // rolling buffer of last 10 highlights; guarded by mu
 }
 
 func newSession(id string) *Session {
@@ -51,6 +61,31 @@ func (s *Session) NextColor() string {
 	color := presenceColors[s.nextColorIdx%len(presenceColors)]
 	s.nextColorIdx++
 	return color
+}
+
+// AddHighlight appends a highlight to the session's rolling buffer (capped at maxHighlightBuf).
+// Thread-safe — called from client ReadPump goroutines.
+func (s *Session) AddHighlight(clientID, initials, text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.highlightBuf = append(s.highlightBuf, HighlightEntry{
+		ClientID: clientID,
+		Initials: initials,
+		Text:     text,
+	})
+	if len(s.highlightBuf) > maxHighlightBuf {
+		s.highlightBuf = s.highlightBuf[len(s.highlightBuf)-maxHighlightBuf:]
+	}
+}
+
+// GetHighlights returns a copy of the current highlight buffer.
+// Thread-safe — called from the HTTP handler goroutine.
+func (s *Session) GetHighlights() []HighlightEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]HighlightEntry, len(s.highlightBuf))
+	copy(result, s.highlightBuf)
+	return result
 }
 
 // run is the session's event loop — must be called in its own goroutine.

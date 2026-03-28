@@ -25,7 +25,7 @@ func main() {
 
 	sessionHandler := handlers.NewSessionHandler(h)
 	wsHandler := handlers.NewWSHandler(h)
-	chatHandler := handlers.NewChatHandler()
+	chatHandler := handlers.NewChatHandler(h)
 
 	mux := http.NewServeMux()
 
