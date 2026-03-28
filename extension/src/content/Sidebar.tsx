@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { BgRequest, BgResponse, HighlightPayload, WsEnvelope } from '../types'
+import { applyHighlight, clearHighlight, serializeSelection } from './highlight'
 
 const WS_BASE = 'ws://localhost:8080'
 
@@ -19,6 +20,7 @@ export function Sidebar() {
   const [status, setStatus] = useState<Status>('connecting')
   const [highlights, setHighlights] = useState<HighlightEntry[]>([])
   const wsRef = useRef<WebSocket | null>(null)
+  // Ref so event listeners always read the current clientId without re-registering
   const clientIdRef = useRef<string | null>(null)
 
   // 1. Ask background SW for session ID, then open WebSocket
@@ -32,7 +34,6 @@ export function Sidebar() {
       setSessionId(res.sessionId)
       connect(res.sessionId)
     })
-
     return () => wsRef.current?.close()
   }, [])
 
@@ -47,22 +48,33 @@ export function Sidebar() {
     ws.onmessage = (evt: MessageEvent<string>) => {
       try {
         const msg = JSON.parse(evt.data) as WsEnvelope
+
         if (msg.type === 'hello') {
           setClientId(msg.clientId)
           clientIdRef.current = msg.clientId
+
         } else if (msg.type === 'highlight') {
           const p = msg.payload as HighlightPayload
+          const isSelf = msg.clientId === clientIdRef.current
+
+          // Add to sidebar feed
           setHighlights(prev =>
             [
-              {
-                clientId: msg.clientId,
-                isSelf: msg.clientId === clientIdRef.current,
-                text: p.text,
-                timestamp: Date.now(),
-              },
+              { clientId: msg.clientId, isSelf, text: p.text, timestamp: Date.now() },
               ...prev,
-            ].slice(0, 30) // keep last 30 highlights
+            ].slice(0, 30)
           )
+
+          // Apply visual highlight on the page for peers only.
+          // Self already has the browser's native selection visible.
+          if (!isSelf) {
+            applyHighlight(msg.clientId, p)
+          }
+
+        } else if (msg.type === 'leave') {
+          // Clear the departing peer's highlight from the page
+          clearHighlight(msg.clientId)
+          setHighlights(prev => prev.filter(h => h.clientId !== msg.clientId))
         }
       } catch {
         // malformed message — ignore
@@ -70,25 +82,32 @@ export function Sidebar() {
     }
   }
 
-  // 2. Capture text selections from the host page and broadcast them
+  // 2. Capture text selections and broadcast them with serialized Range data
   useEffect(() => {
     function onMouseUp() {
       const sel = window.getSelection()
       const text = sel?.toString().trim()
       if (!text || text.length < 3) return
+
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
 
-      const envelope: Omit<WsEnvelope<HighlightPayload>, 'sessionId' | 'clientId'> = {
-        type: 'highlight',
-        payload: { text, url: window.location.href },
+      const rangeData = serializeSelection(sel)
+      if (!rangeData) return
+
+      const payload: HighlightPayload = {
+        text,
+        url: window.location.href,
+        ...rangeData,
       }
-      ws.send(JSON.stringify(envelope))
+      ws.send(JSON.stringify({ type: 'highlight', payload }))
     }
 
     document.addEventListener('mouseup', onMouseUp)
     return () => document.removeEventListener('mouseup', onMouseUp)
   }, [])
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   if (collapsed) {
     return (
