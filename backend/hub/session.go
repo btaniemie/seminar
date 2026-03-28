@@ -6,14 +6,31 @@ import (
 	"sync"
 )
 
+// PresenceUser is the per-user data broadcast in presence events.
+type PresenceUser struct {
+	ClientID string `json:"clientId"`
+	Initials string `json:"initials"`
+	Color    string `json:"color"`
+}
+
+var presenceColors = []string{
+	"#FACC15", // yellow
+	"#4ADE80", // green
+	"#60A5FA", // blue
+	"#FB7185", // red
+	"#C084FC", // purple
+	"#2DD4BF", // teal
+}
+
 // Session is a room that broadcasts messages to all connected clients.
 type Session struct {
-	id        string
-	mu        sync.RWMutex
-	clients   map[*Client]bool
-	broadcast chan []byte
-	join      chan *Client
-	leave     chan *Client
+	id           string
+	mu           sync.RWMutex
+	clients      map[*Client]bool
+	broadcast    chan []byte
+	join         chan *Client
+	leave        chan *Client
+	nextColorIdx int // guarded by mu; incremented on each client join
 }
 
 func newSession(id string) *Session {
@@ -26,6 +43,16 @@ func newSession(id string) *Session {
 	}
 }
 
+// NextColor assigns the next color from the palette to a joining client.
+// Thread-safe — called from the WS handler goroutine, not from run().
+func (s *Session) NextColor() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	color := presenceColors[s.nextColorIdx%len(presenceColors)]
+	s.nextColorIdx++
+	return color
+}
+
 // run is the session's event loop — must be called in its own goroutine.
 func (s *Session) run() {
 	for {
@@ -35,6 +62,8 @@ func (s *Session) run() {
 			s.clients[c] = true
 			s.mu.Unlock()
 			log.Printf("[session %s] client %s joined (%d total)", s.id, c.ID, s.clientCount())
+			// Broadcast updated participant list so everyone sees the new avatar.
+			s.presenceFanout()
 
 		case c := <-s.leave:
 			s.mu.Lock()
@@ -46,9 +75,11 @@ func (s *Session) run() {
 			s.mu.Unlock()
 			log.Printf("[session %s] client %s left (%d remaining)", s.id, c.ID, count)
 
-			// Broadcast presence update so peers know someone left.
 			if count > 0 {
-				s.broadcastPresence(c.ID, "leave")
+				// Send a leave event first so peers can clear this client's highlights.
+				s.sendLeaveEvent(c.ID)
+				// Then broadcast the updated (smaller) participant list.
+				s.presenceFanout()
 			}
 
 		case msg := <-s.broadcast:
@@ -87,22 +118,60 @@ func (s *Session) Leave(c *Client) {
 	s.leave <- c
 }
 
-// broadcastPresence sends a synthetic join/leave event to all remaining clients.
-func (s *Session) broadcastPresence(clientID, eventType string) {
-	type presencePayload struct {
-		ClientID string `json:"clientId"`
-	}
-	payload, _ := json.Marshal(presencePayload{ClientID: clientID})
+// sendLeaveEvent sends { type: "leave", clientId } to all remaining clients.
+// Must only be called from the run() goroutine.
+func (s *Session) sendLeaveEvent(clientID string) {
 	env := Envelope{
-		Type:      eventType,
+		Type:      "leave",
 		SessionID: s.id,
 		ClientID:  clientID,
+		Payload:   json.RawMessage(`{}`),
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		log.Printf("[session %s] failed to marshal leave event: %v", s.id, err)
+		return
+	}
+	s.sendToAll(data)
+}
+
+// presenceFanout sends { type: "presence", payload: [PresenceUser...] } to all clients.
+// Must only be called from the run() goroutine (accesses s.clients without the lock).
+func (s *Session) presenceFanout() {
+	users := make([]PresenceUser, 0, len(s.clients))
+	for c := range s.clients {
+		users = append(users, PresenceUser{
+			ClientID: c.ID,
+			Initials: c.Initials,
+			Color:    c.Color,
+		})
+	}
+	payload, err := json.Marshal(users)
+	if err != nil {
+		log.Printf("[session %s] failed to marshal presence payload: %v", s.id, err)
+		return
+	}
+	env := Envelope{
+		Type:      "presence",
+		SessionID: s.id,
 		Payload:   json.RawMessage(payload),
 	}
 	data, err := json.Marshal(env)
 	if err != nil {
-		log.Printf("[session %s] failed to marshal presence event: %v", s.id, err)
+		log.Printf("[session %s] failed to marshal presence envelope: %v", s.id, err)
 		return
 	}
-	s.Broadcast(data)
+	s.sendToAll(data)
+}
+
+// sendToAll directly fans a message out to every client's send channel.
+// Must only be called from the run() goroutine.
+func (s *Session) sendToAll(data []byte) {
+	for c := range s.clients {
+		select {
+		case c.send <- data:
+		default:
+			log.Printf("[session %s] dropping message for slow client %s", s.id, c.ID)
+		}
+	}
 }

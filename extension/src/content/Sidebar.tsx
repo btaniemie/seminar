@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type {
   BgRequest, BgResponse,
-  ChatPayload, HighlightPayload, WsEnvelope,
+  ChatPayload, HighlightPayload, PresenceUser, WsEnvelope,
 } from '../types'
 import { applyHighlight, clearHighlight, serializeSelection } from './highlight'
 
@@ -27,6 +27,9 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
+  const [myInitials, setMyInitials] = useState('')
+  const [myColor, setMyColor] = useState('')
+  const [participants, setParticipants] = useState<PresenceUser[]>([])
   const [status, setStatus] = useState<Status>('connecting')
   const [highlights, setHighlights] = useState<HighlightEntry[]>([])
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([])
@@ -78,6 +81,11 @@ export function Sidebar() {
         if (msg.type === 'hello') {
           setClientId(msg.clientId)
           clientIdRef.current = msg.clientId
+          if (msg.initials) setMyInitials(msg.initials)
+          if (msg.color) setMyColor(msg.color)
+
+        } else if (msg.type === 'presence') {
+          setParticipants(msg.payload as PresenceUser[])
 
         } else if (msg.type === 'highlight') {
           const p = msg.payload as HighlightPayload
@@ -249,6 +257,21 @@ export function Sidebar() {
       <header className="header">
         <span className="wordmark">Seminar</span>
         <div className="header-right">
+          {/* Presence avatars — one dot per connected participant */}
+          {participants.length > 0 && (
+            <div className="avatar-row">
+              {participants.map(p => (
+                <div
+                  key={p.clientId}
+                  className={`avatar${p.clientId === clientId ? ' avatar--self' : ''}`}
+                  style={{ backgroundColor: p.color }}
+                  title={p.clientId === clientId ? `You (${p.initials})` : p.initials}
+                >
+                  {p.initials}
+                </div>
+              ))}
+            </div>
+          )}
           <span className={`status-pip status-pip--${status}`} title={status} />
           <button className="collapse-btn" onClick={() => setCollapsed(true)} title="Collapse">‹</button>
         </div>

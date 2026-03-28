@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/seminar/backend/hub"
@@ -51,18 +53,21 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := hub.NewClient(clientID, session, conn)
+	// Optional ?name= param lets clients supply a display name for initials.
+	name := r.URL.Query().Get("name")
+	initials := initialsFor(name, clientID)
+	color := session.NextColor()
+
+	client := hub.NewClient(clientID, initials, color, session, conn)
 	session.Join(client)
 
-	// Send the client its own ID so the extension can label its own events.
-	type helloPayload struct {
-		ClientID  string `json:"clientId"`
-		SessionID string `json:"sessionId"`
-	}
+	// Send the client its own ID, initials, and color so it can render its own avatar.
 	if err := conn.WriteJSON(map[string]any{
 		"type":      "hello",
 		"clientId":  clientID,
 		"sessionId": sessionID,
+		"initials":  initials,
+		"color":     color,
 	}); err != nil {
 		log.Printf("[ws] failed to send hello to client %s: %v", clientID, err)
 		conn.Close()
@@ -80,4 +85,33 @@ func generateClientID() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", b), nil
+}
+
+// initialsFor derives up to 2 uppercase initials from a display name.
+// Falls back to the first 2 characters of the clientID if no name is given.
+func initialsFor(name, clientID string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		// Use first 2 chars of clientID as a fallback.
+		runes := []rune(clientID)
+		if len(runes) >= 2 {
+			return strings.ToUpper(string(runes[:2]))
+		}
+		return strings.ToUpper(clientID)
+	}
+
+	parts := strings.Fields(name)
+	if len(parts) == 1 {
+		runes := []rune(parts[0])
+		end := 2
+		if utf8.RuneCountInString(parts[0]) < 2 {
+			end = utf8.RuneCountInString(parts[0])
+		}
+		return strings.ToUpper(string(runes[:end]))
+	}
+
+	// Multi-word name: first rune of each of the first two words.
+	first := []rune(parts[0])
+	second := []rune(parts[1])
+	return strings.ToUpper(string(first[0]) + string(second[0]))
 }

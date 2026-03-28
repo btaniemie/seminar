@@ -25,18 +25,22 @@ type Envelope struct {
 
 // Client represents one connected browser tab.
 type Client struct {
-	ID      string
-	session *Session
-	conn    *websocket.Conn
-	send    chan []byte
+	ID       string
+	Initials string // e.g. "AB" — derived from display name or clientID
+	Color    string // hex color assigned on join, e.g. "#60A5FA"
+	session  *Session
+	conn     *websocket.Conn
+	send     chan []byte
 }
 
-func NewClient(id string, session *Session, conn *websocket.Conn) *Client {
+func NewClient(id, initials, color string, session *Session, conn *websocket.Conn) *Client {
 	return &Client{
-		ID:      id,
-		session: session,
-		conn:    conn,
-		send:    make(chan []byte, 64),
+		ID:       id,
+		Initials: initials,
+		Color:    color,
+		session:  session,
+		conn:     conn,
+		send:     make(chan []byte, 64),
 	}
 }
 
