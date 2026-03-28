@@ -7,12 +7,23 @@ export type WsMessageType =
   | 'chat'
   | 'join'
   | 'leave'
+  | 'presence'
 
 export interface WsEnvelope<P = unknown> {
   type: WsMessageType
   sessionId: string
   clientId: string
+  // Present only on 'hello' messages (sent flat, not in payload)
+  initials?: string
+  color?: string
   payload: P
+}
+
+// One entry in a presence broadcast
+export interface PresenceUser {
+  clientId: string
+  initials: string
+  color: string
 }
 
 // Range data for reconstructing a text selection on a peer's page

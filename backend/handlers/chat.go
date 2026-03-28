@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/seminar/backend/hub"
 )
 
 const socraticSystemPrompt = `You are a Socratic reading partner for a collaborative study group.
@@ -27,10 +29,11 @@ Rules you must always follow:
 // text deltas back to the caller as Server-Sent Events.
 type ChatHandler struct {
 	apiKey string
+	hub    *hub.Hub
 }
 
-func NewChatHandler() *ChatHandler {
-	return &ChatHandler{apiKey: os.Getenv("ANTHROPIC_API_KEY")}
+func NewChatHandler(h *hub.Hub) *ChatHandler {
+	return &ChatHandler{apiKey: os.Getenv("ANTHROPIC_API_KEY"), hub: h}
 }
 
 type chatRequest struct {
@@ -70,7 +73,15 @@ func (ch *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	system := buildSystemPrompt(req.Context)
+	// Fetch the session's rolling highlight buffer (best-effort — nil if session not found).
+	var sessionHighlights []hub.HighlightEntry
+	if req.SessionID != "" {
+		if s := ch.hub.Get(req.SessionID); s != nil {
+			sessionHighlights = s.GetHighlights()
+		}
+	}
+
+	system := buildSystemPrompt(req.Context, sessionHighlights)
 
 	anthropicBody, err := json.Marshal(map[string]any{
 		"model":      "claude-sonnet-4-20250514",
@@ -156,13 +167,20 @@ func (ch *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
-func buildSystemPrompt(ctx readContext) string {
+func buildSystemPrompt(ctx readContext, highlights []hub.HighlightEntry) string {
 	s := socraticSystemPrompt
 	if ctx.PageTitle != "" || ctx.PageURL != "" {
 		s += fmt.Sprintf("\n\nReading session context:\n- Page: %s (%s)", ctx.PageTitle, ctx.PageURL)
 	}
 	if ctx.Highlight != "" {
 		s += fmt.Sprintf("\n- Currently highlighted text: \"%s\"", ctx.Highlight)
+	}
+	if len(highlights) > 0 {
+		s += "\n\nRecent highlights from all session participants (oldest → newest):"
+		for _, h := range highlights {
+			s += fmt.Sprintf("\n- [%s] \"%s\"", h.Initials, h.Text)
+		}
+		s += "\n\nUse these highlights to deepen your Socratic questioning: notice if multiple people selected the same passage (ask what each sees differently), spot patterns across selections, or ask a participant why they flagged something their partner skipped."
 	}
 	return s
 }
