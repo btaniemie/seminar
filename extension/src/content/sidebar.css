@@ -125,7 +125,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 16px;
+  padding: 6px 16px;
   background: #F0EDE8;
   border-bottom: 1px solid #E5E1DB;
   flex-shrink: 0;
@@ -135,20 +135,79 @@
   font-size: 11px;
   color: #A8A29E;
   letter-spacing: .04em;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.invite-btn {
-  margin-left: auto;
+.session-bar-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.invite-btn, .export-btn {
   background: none; border: none; cursor: pointer;
   font-family: inherit;
   font-size: 11px;
   font-weight: 500;
-  color: #D97706;
   padding: 0;
   white-space: nowrap;
   transition: color .15s;
 }
+.invite-btn { color: #D97706; }
 .invite-btn:hover:not(:disabled) { color: #92400E; }
 .invite-btn:disabled { color: #D4C5A9; cursor: not-allowed; }
+.export-btn { color: #78716C; }
+.export-btn:hover:not(:disabled) { color: #292524; }
+.export-btn:disabled { color: #D4C5A9; cursor: not-allowed; }
+
+/* ── Mode selector ───────────────────────────────────────────────────────── */
+
+.mode-bar {
+  display: flex;
+  padding: 6px 16px;
+  gap: 4px;
+  background: #F0EDE8;
+  border-bottom: 1px solid #E5E1DB;
+  flex-shrink: 0;
+}
+.mode-btn {
+  flex: 1;
+  background: none;
+  border: 1.5px solid #D6D0C9;
+  border-radius: 3px;
+  padding: 4px 0;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  color: #78716C;
+  cursor: pointer;
+  letter-spacing: .02em;
+  transition: border-color .15s, background .15s, color .15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mode-btn:hover:not(:disabled) {
+  border-color: #D97706;
+  color: #D97706;
+}
+.mode-btn--active {
+  background: #18181B;
+  border-color: #18181B;
+  color: #F9F7F4;
+}
+.mode-btn--active:hover:not(:disabled) {
+  background: #27272A;
+  border-color: #27272A;
+  color: #F9F7F4;
+}
+.mode-btn:disabled {
+  cursor: default;
+  opacity: .7;
+}
 
 /* ── Highlights ──────────────────────────────────────────────────────────── */
 

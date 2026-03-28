@@ -13,9 +13,8 @@ import (
 	"github.com/seminar/backend/hub"
 )
 
-const socraticSystemPrompt = `You are a Socratic reading partner for a collaborative study group.
-
-Rules you must always follow:
+// Base Socratic rules shared across all modes.
+const socraticBase = `Rules you must always follow:
 - Guide students to insights through questions — never provide answers or explanations directly
 - Never summarize, paraphrase, or translate the text for the student
 - Never complete tasks, assignments, or essays on the student's behalf
@@ -23,6 +22,41 @@ Rules you must always follow:
 - If a student asks you to explain something directly, respond with a question that helps them figure it out themselves
 - Reference specific words or phrases from the highlighted text when relevant
 - Build on what the student says — follow their line of reasoning`
+
+const promptDefault = `You are a Socratic reading partner for a collaborative study group.
+
+` + socraticBase
+
+const promptCloseReading = `You are a Socratic partner for a close reading session.
+
+` + socraticBase + `
+
+Close reading focus:
+- Slow students down to the level of individual words, phrases, and sentences
+- Ask what a specific word choice signals, why the author constructed a sentence this way, what a metaphor is doing
+- Surface structural patterns: repetition, contrast, shifts in tone or register
+- Push toward the "how" and "why" of the text, not just the "what"`
+
+const promptDebatePrep = `You are a Socratic debate coach.
+
+` + socraticBase + `
+
+Debate prep focus:
+- Help students steel-man every position, including ones they disagree with
+- Surface hidden assumptions in their arguments — ask "what has to be true for that claim to hold?"
+- Push them to anticipate the strongest counterargument before they've made it
+- Probe the quality of evidence: is it sufficient? representative? could it support the opposing view?
+- Never take a side yourself`
+
+const promptExamReview = `You are a Socratic exam tutor.
+
+` + socraticBase + `
+
+Exam review focus:
+- Ask one focused exam-style question per response about the highlighted text or the student's claims
+- If they answer correctly, probe deeper or introduce a harder variant
+- If they struggle, give a single hint that points at the right frame — never give the answer
+- Vary question types: identification, comparison, causation, significance, critique`
 
 // ChatHandler handles POST /api/chat.
 // It calls the Anthropic API with a Socratic system prompt and streams
@@ -73,15 +107,17 @@ func (ch *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the session's rolling highlight buffer (best-effort — nil if session not found).
+	// Fetch session state (mode + highlight buffer) — best-effort, nil-safe.
 	var sessionHighlights []hub.HighlightEntry
+	sessionMode := ""
 	if req.SessionID != "" {
 		if s := ch.hub.Get(req.SessionID); s != nil {
 			sessionHighlights = s.GetHighlights()
+			sessionMode = s.GetMode()
 		}
 	}
 
-	system := buildSystemPrompt(req.Context, sessionHighlights)
+	system := buildSystemPrompt(req.Context, sessionHighlights, sessionMode)
 
 	anthropicBody, err := json.Marshal(map[string]any{
 		"model":      "claude-sonnet-4-20250514",
@@ -167,8 +203,21 @@ func (ch *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
-func buildSystemPrompt(ctx readContext, highlights []hub.HighlightEntry) string {
-	s := socraticSystemPrompt
+func systemPromptForMode(mode string) string {
+	switch mode {
+	case "close-reading":
+		return promptCloseReading
+	case "debate-prep":
+		return promptDebatePrep
+	case "exam-review":
+		return promptExamReview
+	default:
+		return promptDefault
+	}
+}
+
+func buildSystemPrompt(ctx readContext, highlights []hub.HighlightEntry, mode string) string {
+	s := systemPromptForMode(mode)
 	if ctx.PageTitle != "" || ctx.PageURL != "" {
 		s += fmt.Sprintf("\n\nReading session context:\n- Page: %s (%s)", ctx.PageTitle, ctx.PageURL)
 	}

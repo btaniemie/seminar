@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type {
   BgRequest, BgResponse,
-  ChatPayload, HighlightPayload, PresenceUser, WsEnvelope,
+  ChatPayload, HighlightPayload, ModePayload, PresenceUser, SessionMode, WsEnvelope,
 } from '../types'
 import { applyHighlight, clearHighlight, serializeSelection } from './highlight'
 
@@ -16,6 +16,7 @@ interface HighlightEntry {
   text: string
   initials: string
   color: string
+  timestamp: number
 }
 
 interface ChatMsg {
@@ -23,7 +24,15 @@ interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
   clientId?: string
+  timestamp: number
 }
+
+const MODE_LABELS: Record<SessionMode, string> = {
+  'close-reading': 'Close Reading',
+  'debate-prep':   'Debate Prep',
+  'exam-review':   'Exam Review',
+}
+const MODES = Object.keys(MODE_LABELS) as SessionMode[]
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
@@ -32,6 +41,8 @@ export function Sidebar() {
   const [myInitials, setMyInitials] = useState('')
   const [myColor, setMyColor] = useState('')
   const [participants, setParticipants] = useState<PresenceUser[]>([])
+  const [mode, setMode] = useState<SessionMode | ''>('')
+  const [hostId, setHostId] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>('connecting')
   const [highlights, setHighlights] = useState<HighlightEntry[]>([])
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([])
@@ -105,13 +116,18 @@ export function Sidebar() {
           users.forEach(u => map.set(u.clientId, u))
           participantMapRef.current = map
 
+        } else if (msg.type === 'mode') {
+          const p = msg.payload as ModePayload
+          setMode(p.mode)
+          setHostId(p.hostId)
+
         } else if (msg.type === 'highlight') {
           const p = msg.payload as HighlightPayload
           // Look up presence info so the feed and overlay use consistent colors/names
           const pUser = isSelf
             ? { clientId: msg.clientId, initials: myInitialsRef.current || msg.clientId.slice(0, 2).toUpperCase(), color: myColorRef.current || '#A8A29E' }
             : (participantMapRef.current.get(msg.clientId) ?? { clientId: msg.clientId, initials: msg.clientId.slice(0, 2).toUpperCase(), color: '#A8A29E' })
-          const entry: HighlightEntry = { clientId: msg.clientId, isSelf, text: p.text, initials: pUser.initials, color: pUser.color }
+          const entry: HighlightEntry = { clientId: msg.clientId, isSelf, text: p.text, initials: pUser.initials, color: pUser.color, timestamp: Date.now() }
           setHighlights(prev => {
             const next = [entry, ...prev].slice(0, 10)
             highlightsRef.current = next
@@ -128,6 +144,7 @@ export function Sidebar() {
               role: p.role,
               content: p.content,
               clientId: msg.clientId,
+              timestamp: Date.now(),
             }])
           }
 
@@ -166,7 +183,7 @@ export function Sidebar() {
 
     const userMsg: ChatMsg = {
       id: crypto.randomUUID(), role: 'user', content: text,
-      clientId: clientId ?? undefined,
+      clientId: clientId ?? undefined, timestamp: Date.now(),
     }
 
     setChatMessages(prev => [...prev, userMsg])
@@ -224,7 +241,7 @@ export function Sidebar() {
         }
       }
 
-      const aiMsg: ChatMsg = { id: crypto.randomUUID(), role: 'assistant', content: fullText }
+      const aiMsg: ChatMsg = { id: crypto.randomUUID(), role: 'assistant', content: fullText, timestamp: Date.now() }
       setChatMessages(prev => [...prev, aiMsg])
       setStreamingText('')
 
@@ -239,11 +256,65 @@ export function Sidebar() {
       setChatMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: 'assistant',
         content: 'Could not reach the backend. Is the server running?',
+        timestamp: Date.now(),
       }])
     } finally {
       setIsStreaming(false)
       setStreamingText('')
     }
+  }
+
+  function sendModeChange(newMode: SessionMode) {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({
+      type: 'set_mode',
+      payload: { mode: newMode },
+    }))
+  }
+
+  function exportTranscript() {
+    const pageTitle = document.title
+    const pageUrl = window.location.href
+    const date = new Date().toLocaleDateString()
+    const sessionLabel = sessionId ?? 'session'
+    const modeLabel = mode ? MODE_LABELS[mode] : 'General'
+
+    let md = `# Seminar Session — ${pageTitle}\n\n`
+    md += `**Page:** ${pageUrl}\n`
+    md += `**Date:** ${date}\n`
+    md += `**Mode:** ${modeLabel}\n`
+    md += `**Session:** ${sessionLabel}\n\n`
+
+    if (highlights.length > 0) {
+      md += `## Highlights\n\n`
+      for (const h of [...highlights].reverse()) {
+        const t = new Date(h.timestamp).toLocaleTimeString()
+        const who = h.isSelf ? 'You' : h.initials
+        md += `- **${who}** (${t}): "${h.text}"\n`
+      }
+      md += '\n'
+    }
+
+    if (chatMessages.length > 0) {
+      md += `## Discussion\n\n`
+      for (const m of chatMessages) {
+        const t = new Date(m.timestamp).toLocaleTimeString()
+        const who = m.role === 'assistant'
+          ? 'Seminar'
+          : m.clientId === clientId
+            ? 'You'
+            : (participantMapRef.current.get(m.clientId ?? '')?.initials ?? 'Peer')
+        md += `**${who}** _(${t})_\n\n${m.content}\n\n---\n\n`
+      }
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = `seminar-${sessionLabel}.md`
+    a.click()
+    URL.revokeObjectURL(blobUrl)
   }
 
   function copyLink() {
@@ -302,13 +373,38 @@ export function Sidebar() {
       {/* Session */}
       <div className="session-bar">
         <code className="session-id">{sessionId ?? '…'}</code>
-        <button
-          className="invite-btn"
-          onClick={copyLink}
-          disabled={!sessionId}
-        >
-          {copied ? 'Copied ✓' : 'Copy invite link'}
-        </button>
+        <div className="session-bar-actions">
+          <button
+            className="invite-btn"
+            onClick={copyLink}
+            disabled={!sessionId}
+          >
+            {copied ? 'Copied ✓' : 'Invite'}
+          </button>
+          <button
+            className="export-btn"
+            onClick={exportTranscript}
+            disabled={chatMessages.length === 0 && highlights.length === 0}
+            title="Export session as Markdown"
+          >
+            Export
+          </button>
+        </div>
+      </div>
+
+      {/* Mode selector — visible to all, editable only by host */}
+      <div className="mode-bar">
+        {MODES.map(m => (
+          <button
+            key={m}
+            className={`mode-btn${mode === m ? ' mode-btn--active' : ''}`}
+            onClick={() => sendModeChange(m)}
+            disabled={clientId !== hostId}
+            title={clientId !== hostId ? 'Only the session host can change the mode' : undefined}
+          >
+            {MODE_LABELS[m]}
+          </button>
+        ))}
       </div>
 
       {/* Highlights */}

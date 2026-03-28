@@ -22,6 +22,7 @@ func main() {
 	}
 
 	h := hub.NewHub()
+	hub.LoadSessions(h) // restore persisted sessions from disk
 
 	sessionHandler := handlers.NewSessionHandler(h)
 	wsHandler := handlers.NewWSHandler(h)

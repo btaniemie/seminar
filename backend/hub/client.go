@@ -90,6 +90,17 @@ func (c *Client) ReadPump() {
 			}
 		}
 
+		// Mode changes are handled server-side; don't broadcast the raw message.
+		if env.Type == "set_mode" {
+			var mp struct {
+				Mode string `json:"mode"`
+			}
+			if json.Unmarshal(env.Payload, &mp) == nil && mp.Mode != "" {
+				c.session.SetMode(c.ID, mp.Mode)
+			}
+			continue
+		}
+
 		stamped, err := json.Marshal(env)
 		if err != nil {
 			log.Printf("[client %s] marshal error: %v", c.ID, err)

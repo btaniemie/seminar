@@ -41,6 +41,8 @@ type Session struct {
 	leave        chan *Client
 	nextColorIdx int              // guarded by mu; incremented on each client join
 	highlightBuf []HighlightEntry // rolling buffer of last 10 highlights; guarded by mu
+	mode         string           // "close-reading" | "debate-prep" | "exam-review"; guarded by mu
+	hostID       string           // clientId of first joiner; guarded by mu
 }
 
 func newSession(id string) *Session {
@@ -67,7 +69,6 @@ func (s *Session) NextColor() string {
 // Thread-safe — called from client ReadPump goroutines.
 func (s *Session) AddHighlight(clientID, initials, text string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.highlightBuf = append(s.highlightBuf, HighlightEntry{
 		ClientID: clientID,
 		Initials: initials,
@@ -76,6 +77,8 @@ func (s *Session) AddHighlight(clientID, initials, text string) {
 	if len(s.highlightBuf) > maxHighlightBuf {
 		s.highlightBuf = s.highlightBuf[len(s.highlightBuf)-maxHighlightBuf:]
 	}
+	s.mu.Unlock()
+	go s.persist()
 }
 
 // GetHighlights returns a copy of the current highlight buffer.
@@ -88,6 +91,70 @@ func (s *Session) GetHighlights() []HighlightEntry {
 	return result
 }
 
+// SetMode updates the session mode if the caller is the host, then fans the new mode out.
+// Safe to call from any goroutine.
+func (s *Session) SetMode(callerID, mode string) {
+	s.mu.Lock()
+	if s.hostID != callerID {
+		s.mu.Unlock()
+		return
+	}
+	s.mode = mode
+	s.mu.Unlock()
+	s.broadcastModeUpdate()
+	go s.persist()
+}
+
+// GetMode returns the current session mode.
+func (s *Session) GetMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode
+}
+
+// HostID returns the clientId of the session host.
+func (s *Session) HostID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.hostID
+}
+
+// broadcastModeUpdate fans out { type:"mode", payload:{mode,hostId} } via the broadcast channel.
+// Safe to call from any goroutine.
+func (s *Session) broadcastModeUpdate() {
+	s.mu.RLock()
+	mode := s.mode
+	hostID := s.hostID
+	s.mu.RUnlock()
+
+	type modePayload struct {
+		Mode   string `json:"mode"`
+		HostID string `json:"hostId"`
+	}
+	payload, _ := json.Marshal(modePayload{Mode: mode, HostID: hostID})
+	env := Envelope{Type: "mode", SessionID: s.id, Payload: json.RawMessage(payload)}
+	data, _ := json.Marshal(env)
+	s.Broadcast(data) // goes through broadcast channel — safe from any goroutine
+}
+
+// modeFanout sends { type:"mode" } directly to all clients.
+// Must only be called from the run() goroutine.
+func (s *Session) modeFanout() {
+	s.mu.RLock()
+	mode := s.mode
+	hostID := s.hostID
+	s.mu.RUnlock()
+
+	type modePayload struct {
+		Mode   string `json:"mode"`
+		HostID string `json:"hostId"`
+	}
+	payload, _ := json.Marshal(modePayload{Mode: mode, HostID: hostID})
+	env := Envelope{Type: "mode", SessionID: s.id, Payload: json.RawMessage(payload)}
+	data, _ := json.Marshal(env)
+	s.sendToAll(data)
+}
+
 // run is the session's event loop — must be called in its own goroutine.
 func (s *Session) run() {
 	for {
@@ -95,10 +162,15 @@ func (s *Session) run() {
 		case c := <-s.join:
 			s.mu.Lock()
 			s.clients[c] = true
+			if s.hostID == "" {
+				s.hostID = c.ID
+			}
 			s.mu.Unlock()
 			log.Printf("[session %s] client %s joined (%d total)", s.id, c.ID, s.clientCount())
-			// Broadcast updated participant list so everyone sees the new avatar.
+			// Broadcast updated participant list and current mode to everyone.
 			s.presenceFanout()
+			s.modeFanout()
+			go s.persist()
 
 		case c := <-s.leave:
 			s.mu.Lock()

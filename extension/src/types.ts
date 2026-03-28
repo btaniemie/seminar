@@ -8,6 +8,15 @@ export type WsMessageType =
   | 'join'
   | 'leave'
   | 'presence'
+  | 'mode'
+  | 'set_mode'
+
+export type SessionMode = 'close-reading' | 'debate-prep' | 'exam-review'
+
+export interface ModePayload {
+  mode: SessionMode | ''
+  hostId: string
+}
 
 export interface WsEnvelope<P = unknown> {
   type: WsMessageType
