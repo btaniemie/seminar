@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Seminar",
+  "version": "0.1.0",
+  "description": "Collaborative reading with an AI Socratic partner",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["src/content/index.tsx"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,213 @@
+/* All styles are scoped inside the Shadow DOM — no leaking to/from the host page */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Collapsed tab ───────────────────────────────────────────────────────── */
+
+.tab {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+  font-family: system-ui, sans-serif;
+  user-select: none;
+}
+
+.tab:hover {
+  background: #f9fafb;
+}
+
+.tab-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ── Full sidebar ────────────────────────────────────────────────────────── */
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100vh;
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  color: #111827;
+  overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: -0.01em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+}
+
+.btn-icon:hover {
+  color: #111827;
+}
+
+/* ── Status dot ──────────────────────────────────────────────────────────── */
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot--connected    { background: #22c55e; }
+.dot--connecting   { background: #f59e0b; }
+.dot--disconnected { background: #ef4444; }
+
+/* ── Session info ────────────────────────────────────────────────────────── */
+
+.session-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.session-id {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: #374151;
+  background: #e5e7eb;
+  padding: 2px 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Section title ───────────────────────────────────────────────────────── */
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 14px 6px;
+}
+
+/* ── Highlights ──────────────────────────────────────────────────────────── */
+
+.highlights {
+  flex: 1;
+  overflow-y: auto;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.empty {
+  font-size: 12px;
+  color: #9ca3af;
+  padding: 8px 14px 12px;
+  line-height: 1.5;
+}
+
+.highlight-item {
+  padding: 8px 14px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.highlight-item--self {
+  background: #f0f9ff;
+}
+
+.highlight-author {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.highlight-item--self .highlight-author {
+  color: #3b82f6;
+}
+
+.highlight-text {
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.5;
+  margin-top: 3px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* ── Chat placeholder ────────────────────────────────────────────────────── */
+
+.chat-placeholder {
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
