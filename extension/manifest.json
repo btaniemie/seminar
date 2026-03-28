@@ -3,8 +3,14 @@
   "name": "Seminar",
   "version": "0.1.0",
   "description": "Collaborative reading with an AI Socratic partner",
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "microphone"],
   "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["pdf-viewer.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "background": {
     "service_worker": "src/background/index.ts",
     "type": "module"

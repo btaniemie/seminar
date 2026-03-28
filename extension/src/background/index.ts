@@ -17,6 +17,16 @@ chrome.runtime.onMessage.addListener(
       )
       return true
     }
+
+    if (msg.type === 'OPEN_PDF_VIEWER') {
+      const viewerUrl =
+        chrome.runtime.getURL('pdf-viewer.html') +
+        '?file=' + encodeURIComponent(msg.pdfUrl)
+      chrome.tabs.update({ url: viewerUrl })
+        .then(() => sendResponse({ ok: true as const }))
+        .catch(() => sendResponse({ error: 'could not update tab' }))
+      return true
+    }
   }
 )
 

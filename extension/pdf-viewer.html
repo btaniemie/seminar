@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seminar — PDF Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    /* Text layer styles come from pdfjs-dist/web/pdf_viewer.css (imported in main.tsx) */
+  </style>
+</head>
+<body>
+  <div id="pdf-root" style="height: 100vh;"></div>
+  <script type="module" src="/src/pdf-viewer/main.tsx"></script>
+</body>
+</html>

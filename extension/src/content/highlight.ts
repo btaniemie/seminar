@@ -37,17 +37,21 @@ export function serializeSelection(sel: Selection): RangeData | null {
 }
 
 /**
- * Overlay a peer's highlight onto the page with an initials label.
+ * Overlay a highlight onto the page with an initials label.
  * Replaces any previous overlay for that client.
  *
- * @param initials - 1–2 uppercase letters shown in a pill above the selection
- * @param color    - hex color (#RRGGBB) matching the user's presence avatar
+ * @param initials    - 1–2 uppercase letters shown in a pill above the selection
+ * @param color       - hex color (#RRGGBB) matching the user's presence avatar
+ * @param scrollEl    - optional scroll container (e.g. the PDF viewer's inner div).
+ *                      When provided, overlays are appended there and offset by its
+ *                      scrollTop/scrollLeft instead of window.scrollX/Y.
  */
 export function applyHighlight(
   clientId: string,
   data: RangeData,
   initials: string,
   color: string,
+  scrollEl?: HTMLElement,
 ): void {
   clearHighlight(clientId) // remove stale overlay first
 
@@ -58,12 +62,16 @@ export function applyHighlight(
   const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0)
   if (rects.length === 0) return
 
+  // When a custom scroll container is given, overlay divs are appended to it and
+  // positioned relative to its scrolled content. Otherwise fall back to document.body
+  // with window scroll offsets (standard behaviour on regular web pages).
+  const root    = scrollEl ?? document.body
+  const scrollX = scrollEl ? scrollEl.scrollLeft : window.scrollX
+  const scrollY = scrollEl ? scrollEl.scrollTop  : window.scrollY
+
   const container = document.createElement('div')
   container.id = highlightId(clientId)
   container.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:2147483646;'
-
-  const scrollX = window.scrollX
-  const scrollY = window.scrollY
 
   // Name label — sits just above the first line of the selection
   if (initials) {
@@ -105,7 +113,7 @@ export function applyHighlight(
     container.appendChild(div)
   }
 
-  document.body.appendChild(container)
+  root.appendChild(container)
 }
 
 /** Remove a peer's highlight overlay (on leave or when they make a new selection). */

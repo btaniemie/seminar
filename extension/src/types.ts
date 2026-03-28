@@ -10,6 +10,9 @@ export type WsMessageType =
   | 'presence'
   | 'mode'
   | 'set_mode'
+  | 'rtc_offer'
+  | 'rtc_answer'
+  | 'rtc_ice'
 
 export type SessionMode = 'close-reading' | 'debate-prep' | 'exam-review'
 
@@ -22,11 +25,18 @@ export interface WsEnvelope<P = unknown> {
   type: WsMessageType
   sessionId: string
   clientId: string
+  to?: string       // target clientId for directed WebRTC signaling messages
   // Present only on 'hello' messages (sent flat, not in payload)
   initials?: string
   color?: string
   payload: P
 }
+
+// ── WebRTC signaling payloads ────────────────────────────────────────────────
+
+export interface RtcOfferPayload  { sdp: string }
+export interface RtcAnswerPayload { sdp: string }
+export interface RtcIcePayload    { candidate: RTCIceCandidateInit }
 
 // One entry in a presence broadcast
 export interface PresenceUser {
@@ -58,7 +68,9 @@ export interface ChatPayload {
 export type BgRequest =
   | { type: 'GET_SESSION' }
   | { type: 'JOIN_SESSION'; sessionId: string }
+  | { type: 'OPEN_PDF_VIEWER'; pdfUrl: string }
 
 export type BgResponse =
   | { sessionId: string }
+  | { ok: true }
   | { error: string }

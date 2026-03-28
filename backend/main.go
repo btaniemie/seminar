@@ -27,6 +27,7 @@ func main() {
 	sessionHandler := handlers.NewSessionHandler(h)
 	wsHandler := handlers.NewWSHandler(h)
 	chatHandler := handlers.NewChatHandler(h)
+	transcribeHandler := handlers.NewTranscribeHandler()
 
 	mux := http.NewServeMux()
 
@@ -34,6 +35,7 @@ func main() {
 	mux.HandleFunc("POST /api/session", sessionHandler.CreateSession)
 	mux.HandleFunc("GET /api/session/{id}", sessionHandler.GetSession)
 	mux.HandleFunc("POST /api/chat", chatHandler.Chat)
+	mux.HandleFunc("POST /api/transcribe", transcribeHandler.Transcribe)
 
 	// WebSocket endpoint
 	mux.HandleFunc("GET /ws", wsHandler.ServeWS)

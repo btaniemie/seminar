@@ -31,12 +31,20 @@ var presenceColors = []string{
 
 const maxHighlightBuf = 10
 
+// DirectMsg is a message targeted at a single named client (used for WebRTC signaling).
+type DirectMsg struct {
+	To   string
+	Data []byte
+}
+
 // Session is a room that broadcasts messages to all connected clients.
 type Session struct {
 	id           string
 	mu           sync.RWMutex
 	clients      map[*Client]bool
+	clientsByID  map[string]*Client // guarded by run() goroutine only
 	broadcast    chan []byte
+	direct       chan DirectMsg     // for targeted WebRTC signaling messages
 	join         chan *Client
 	leave        chan *Client
 	nextColorIdx int              // guarded by mu; incremented on each client join
@@ -47,12 +55,21 @@ type Session struct {
 
 func newSession(id string) *Session {
 	return &Session{
-		id:        id,
-		clients:   make(map[*Client]bool),
-		broadcast: make(chan []byte, 256),
-		join:      make(chan *Client),
-		leave:     make(chan *Client),
+		id:          id,
+		clients:     make(map[*Client]bool),
+		clientsByID: make(map[string]*Client),
+		broadcast:   make(chan []byte, 256),
+		direct:      make(chan DirectMsg, 256),
+		join:        make(chan *Client),
+		leave:       make(chan *Client),
 	}
+}
+
+// SendToClient routes a message directly to a single client by its ID.
+// Safe to call from any goroutine — goes through the direct channel which
+// is consumed exclusively by the run() goroutine.
+func (s *Session) SendToClient(to string, data []byte) {
+	s.direct <- DirectMsg{To: to, Data: data}
 }
 
 // NextColor assigns the next color from the palette to a joining client.
@@ -166,6 +183,7 @@ func (s *Session) run() {
 				s.hostID = c.ID
 			}
 			s.mu.Unlock()
+			s.clientsByID[c.ID] = c // only written from run()
 			log.Printf("[session %s] client %s joined (%d total)", s.id, c.ID, s.clientCount())
 			// Broadcast updated participant list and current mode to everyone.
 			s.presenceFanout()
@@ -180,6 +198,7 @@ func (s *Session) run() {
 			}
 			count := len(s.clients)
 			s.mu.Unlock()
+			delete(s.clientsByID, c.ID) // only written from run()
 			log.Printf("[session %s] client %s left (%d remaining)", s.id, c.ID, count)
 
 			if count > 0 {
@@ -200,6 +219,16 @@ func (s *Session) run() {
 				}
 			}
 			s.mu.RUnlock()
+
+		case dm := <-s.direct:
+			// Deliver a WebRTC signaling message to one specific client.
+			if c, ok := s.clientsByID[dm.To]; ok {
+				select {
+				case c.send <- dm.Data:
+				default:
+					log.Printf("[session %s] dropping direct msg for %s", s.id, dm.To)
+				}
+			}
 		}
 	}
 }

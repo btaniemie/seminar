@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type {
   BgRequest, BgResponse,
   ChatPayload, HighlightPayload, ModePayload, PresenceUser, SessionMode, WsEnvelope,
+  RtcOfferPayload, RtcAnswerPayload, RtcIcePayload,
 } from '../types'
 import { applyHighlight, clearHighlight, serializeSelection } from './highlight'
 
@@ -50,8 +51,18 @@ export function Sidebar() {
   const [inputText, setInputText] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [micError, setMicError] = useState<string | null>(null)
+  const [isPdf, setIsPdf] = useState(false)
+  const [pdfRedirecting, setPdfRedirecting] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  // WebRTC: one RTCPeerConnection per remote peer (keyed by clientId)
+  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  // Open data channels to peers — when present, highlights skip the WS broadcast for that peer
+  const dataChannelsRef = useRef<Map<string, RTCDataChannel>>(new Map())
   const clientIdRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   // Keep a ref to highlights so sendMessage can read the latest without a stale closure
@@ -66,6 +77,16 @@ export function Sidebar() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatMessages, streamingText])
+
+  // Detect if the current page is a native PDF — Chrome shows an <embed> for them.
+  // In that case we offer to redirect to the Seminar PDF viewer (PDF.js based).
+  useEffect(() => {
+    const isPdfPage =
+      document.contentType === 'application/pdf' ||
+      (window.location.pathname.toLowerCase().endsWith('.pdf') &&
+        !!document.querySelector('embed[type="application/pdf"]'))
+    setIsPdf(isPdfPage)
+  }, [])
 
   // Get session from background SW, then open WebSocket.
   // If the page URL contains ?seminar_session=<id>, join that session
@@ -108,6 +129,20 @@ export function Sidebar() {
             myColorRef.current = msg.color
           }
 
+        } else if (msg.type === 'rtc_offer') {
+          const p = msg.payload as RtcOfferPayload
+          handleRtcOffer(msg.clientId, p.sdp).catch(console.error)
+
+        } else if (msg.type === 'rtc_answer') {
+          const p = msg.payload as RtcAnswerPayload
+          const pc = peersRef.current.get(msg.clientId)
+          if (pc) pc.setRemoteDescription({ type: 'answer', sdp: p.sdp }).catch(console.error)
+
+        } else if (msg.type === 'rtc_ice') {
+          const p = msg.payload as RtcIcePayload
+          const pc = peersRef.current.get(msg.clientId)
+          if (pc) pc.addIceCandidate(p.candidate).catch(console.error)
+
         } else if (msg.type === 'presence') {
           const users = msg.payload as PresenceUser[]
           setParticipants(users)
@@ -116,12 +151,31 @@ export function Sidebar() {
           users.forEach(u => map.set(u.clientId, u))
           participantMapRef.current = map
 
+          // Initiate WebRTC with any new peers we haven't connected to yet.
+          // The client with the lexicographically greater ID sends the offer,
+          // ensuring exactly one side initiates for each pair.
+          const myId = clientIdRef.current
+          if (myId) {
+            for (const u of users) {
+              if (u.clientId !== myId && !peersRef.current.has(u.clientId) && myId > u.clientId) {
+                initiateWebRTC(u.clientId).catch(console.error)
+              }
+            }
+          }
+
         } else if (msg.type === 'mode') {
           const p = msg.payload as ModePayload
           setMode(p.mode)
           setHostId(p.hostId)
 
         } else if (msg.type === 'highlight') {
+          // If we have an open data channel with this peer, they sent us the highlight
+          // directly via DC — skip the WS echo to avoid double-rendering.
+          if (!isSelf && dataChannelsRef.current.has(msg.clientId)) {
+            const dc = dataChannelsRef.current.get(msg.clientId)!
+            if (dc.readyState === 'open') return
+          }
+
           const p = msg.payload as HighlightPayload
           // Look up presence info so the feed and overlay use consistent colors/names
           const pUser = isSelf
@@ -133,7 +187,7 @@ export function Sidebar() {
             highlightsRef.current = next
             return next
           })
-          if (!isSelf) applyHighlight(msg.clientId, p, pUser.initials, pUser.color)
+          if (!isSelf) applyHighlight(msg.clientId, p, pUser.initials, pUser.color, pdfScrollEl())
 
         } else if (msg.type === 'chat') {
           // Only add peer messages — our own are already in local state
@@ -151,6 +205,10 @@ export function Sidebar() {
         } else if (msg.type === 'leave') {
           clearHighlight(msg.clientId)
           setHighlights(prev => prev.filter(h => h.clientId !== msg.clientId))
+          // Close and remove WebRTC peer
+          peersRef.current.get(msg.clientId)?.close()
+          peersRef.current.delete(msg.clientId)
+          dataChannelsRef.current.delete(msg.clientId)
         }
       } catch { /* malformed message */ }
     }
@@ -171,7 +229,24 @@ export function Sidebar() {
       const payload: HighlightPayload = {
         text, url: window.location.href, ...rangeData,
       }
+      // Always send over WS — server records this in the highlight buffer for AI context,
+      // and WS serves as the fallback relay for peers without open data channels.
       ws.send(JSON.stringify({ type: 'highlight', payload }))
+
+      // Show own highlight as a persistent overlay immediately (the server echoes
+      // it back but isSelf suppresses it there — this gives local visual feedback).
+      const myId = clientIdRef.current
+      if (myId) {
+        applyHighlight(myId, payload, myInitialsRef.current || '?', myColorRef.current || '#A8A29E', pdfScrollEl())
+      }
+
+      // Also send directly over any open data channels (P2P fast path).
+      // Peers with an open DC will ignore the redundant WS broadcast.
+      for (const dc of dataChannelsRef.current.values()) {
+        if (dc.readyState === 'open') {
+          try { dc.send(JSON.stringify(payload)) } catch { /* ignore */ }
+        }
+      }
     }
     document.addEventListener('mouseup', onMouseUp)
     return () => document.removeEventListener('mouseup', onMouseUp)
@@ -262,6 +337,182 @@ export function Sidebar() {
       setIsStreaming(false)
       setStreamingText('')
     }
+  }
+
+  // Returns the PDF viewer's scroll container when running inside the Seminar
+  // PDF viewer page, otherwise null. Used to position overlays correctly.
+  function pdfScrollEl(): HTMLElement | undefined {
+    return document.getElementById('seminar-pdf-scroll') ?? undefined
+  }
+
+  // ── WebRTC helpers ──────────────────────────────────────────────────────────
+
+  const RTC_CONFIG: RTCConfiguration = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  }
+
+  /** Wire up a data channel regardless of which side created it. */
+  function setupDataChannel(dc: RTCDataChannel, peerId: string) {
+    dc.onopen = () => {
+      dataChannelsRef.current.set(peerId, dc)
+    }
+    dc.onclose = () => {
+      dataChannelsRef.current.delete(peerId)
+    }
+    dc.onerror = () => {
+      dataChannelsRef.current.delete(peerId)
+    }
+    dc.onmessage = (evt: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(evt.data) as HighlightPayload
+        const pUser = participantMapRef.current.get(peerId) ??
+          { clientId: peerId, initials: peerId.slice(0, 2).toUpperCase(), color: '#A8A29E' }
+        const entry: HighlightEntry = {
+          clientId: peerId, isSelf: false,
+          text: payload.text, initials: pUser.initials, color: pUser.color,
+          timestamp: Date.now(),
+        }
+        setHighlights(prev => {
+          const next = [entry, ...prev].slice(0, 10)
+          highlightsRef.current = next
+          return next
+        })
+        applyHighlight(peerId, payload, pUser.initials, pUser.color, pdfScrollEl())
+      } catch { /* malformed DC message */ }
+    }
+  }
+
+  /** Create a peer connection and send an offer (we are the initiator). */
+  async function initiateWebRTC(peerId: string) {
+    const pc = new RTCPeerConnection(RTC_CONFIG)
+    peersRef.current.set(peerId, pc)
+
+    // Create data channel before the offer so it's included in the SDP
+    const dc = pc.createDataChannel('highlights', { ordered: false, maxRetransmits: 0 })
+    setupDataChannel(dc, peerId)
+
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return
+      wsRef.current?.send(JSON.stringify({
+        type: 'rtc_ice', to: peerId,
+        payload: { candidate: e.candidate.toJSON() } satisfies RtcIcePayload,
+      }))
+    }
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        // WebRTC failed — fall back silently to WS relay
+        peersRef.current.delete(peerId)
+        dataChannelsRef.current.delete(peerId)
+      }
+    }
+
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    wsRef.current?.send(JSON.stringify({
+      type: 'rtc_offer', to: peerId,
+      payload: { sdp: offer.sdp } satisfies RtcOfferPayload,
+    }))
+  }
+
+  /** Handle an incoming RTC offer (we are the answerer). */
+  async function handleRtcOffer(fromId: string, sdp: string) {
+    const pc = new RTCPeerConnection(RTC_CONFIG)
+    peersRef.current.set(fromId, pc)
+
+    // The initiator creates the data channel — we receive it here
+    pc.ondatachannel = (e) => setupDataChannel(e.channel, fromId)
+
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return
+      wsRef.current?.send(JSON.stringify({
+        type: 'rtc_ice', to: fromId,
+        payload: { candidate: e.candidate.toJSON() } satisfies RtcIcePayload,
+      }))
+    }
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        peersRef.current.delete(fromId)
+        dataChannelsRef.current.delete(fromId)
+      }
+    }
+
+    await pc.setRemoteDescription({ type: 'offer', sdp })
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    wsRef.current?.send(JSON.stringify({
+      type: 'rtc_answer', to: fromId,
+      payload: { sdp: answer.sdp } satisfies RtcAnswerPayload,
+    }))
+  }
+
+  function openPdfViewer() {
+    setPdfRedirecting(true)
+    const req: BgRequest = { type: 'OPEN_PDF_VIEWER', pdfUrl: window.location.href }
+    chrome.runtime.sendMessage(req, () => {
+      // Tab navigates away — nothing more to do here
+    })
+  }
+
+  async function toggleRecording() {
+    // Stop an active recording
+    if (isRecording && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop()
+      return
+    }
+
+    setMicError(null)
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } catch {
+      setMicError('Microphone access denied')
+      return
+    }
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm'
+
+    const recorder = new MediaRecorder(stream, { mimeType })
+    mediaRecorderRef.current = recorder
+    audioChunksRef.current = []
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data)
+    }
+
+    recorder.onstop = async () => {
+      // Stop all mic tracks immediately
+      stream.getTracks().forEach(t => t.stop())
+      setIsRecording(false)
+
+      const blob = new Blob(audioChunksRef.current, { type: mimeType })
+      audioChunksRef.current = []
+
+      const form = new FormData()
+      form.append('audio', blob, 'audio.webm')
+
+      try {
+        const resp = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: form })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const { text } = await resp.json() as { text: string }
+        if (text) setInputText(prev => (prev ? prev + ' ' + text : text))
+      } catch (err) {
+        console.error('[seminar] transcribe error:', err)
+        setMicError('Transcription failed')
+      }
+    }
+
+    // Auto-stop after 60 s to avoid runaway recordings
+    recorder.start()
+    setIsRecording(true)
+    setTimeout(() => {
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop()
+      }
+    }, 60_000)
   }
 
   function sendModeChange(newMode: SessionMode) {
@@ -407,6 +658,20 @@ export function Sidebar() {
         ))}
       </div>
 
+      {/* PDF banner — shown when Chrome's native PDF viewer is active */}
+      {isPdf && (
+        <div className="pdf-banner">
+          <span className="pdf-banner-text">PDF detected</span>
+          <button
+            className="pdf-open-btn"
+            onClick={openPdfViewer}
+            disabled={pdfRedirecting}
+          >
+            {pdfRedirecting ? 'Opening…' : 'Open in Seminar viewer →'}
+          </button>
+        </div>
+      )}
+
       {/* Highlights */}
       {highlights.length > 0 && (
         <div className="highlights-strip">
@@ -468,7 +733,19 @@ export function Sidebar() {
           rows={2}
         />
         <div className="input-footer">
-          <span className="input-hint">Enter to send · Shift+Enter for newline</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* mic button disabled — voice input not shipped
+            <button
+              className={`mic-btn${isRecording ? ' mic-btn--recording' : ''}`}
+              onClick={toggleRecording}
+              disabled={isStreaming || status !== 'connected'}
+              title={isRecording ? 'Stop recording' : 'Record voice input'}
+            >
+              {isRecording ? '■' : '🎙'}
+            </button>
+            */}
+            <span className="input-hint">Enter to send · Shift+Enter for newline</span>
+          </div>
           <button
             className="ask-btn"
             onClick={sendMessage}

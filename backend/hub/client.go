@@ -17,9 +17,10 @@ const (
 
 // Envelope is the wire format for all WebSocket messages.
 type Envelope struct {
-	Type      string          `json:"type"`      // "highlight" | "cursor" | "chat" | "join" | "leave"
+	Type      string          `json:"type"`      // "highlight" | "chat" | "leave" | "rtc_offer" | …
 	SessionID string          `json:"sessionId"`
 	ClientID  string          `json:"clientId"`
+	To        string          `json:"to,omitempty"` // target clientId for directed signaling messages
 	Payload   json.RawMessage `json:"payload"`
 }
 
@@ -98,6 +99,21 @@ func (c *Client) ReadPump() {
 			if json.Unmarshal(env.Payload, &mp) == nil && mp.Mode != "" {
 				c.session.SetMode(c.ID, mp.Mode)
 			}
+			continue
+		}
+
+		// WebRTC signaling messages are relayed only to the named target client.
+		if env.Type == "rtc_offer" || env.Type == "rtc_answer" || env.Type == "rtc_ice" {
+			if env.To == "" {
+				log.Printf("[client %s] rtc message missing 'to' field, dropping", c.ID)
+				continue
+			}
+			stamped, err := json.Marshal(env)
+			if err != nil {
+				log.Printf("[client %s] marshal error: %v", c.ID, err)
+				continue
+			}
+			c.session.SendToClient(env.To, stamped)
 			continue
 		}
 
