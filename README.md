@@ -2,13 +2,12 @@
 
 A Chrome extension for collaborative reading with a Socratic AI. Built for college study groups.
 
-**Demo:** _YouTube link coming soon_
+## Demo
+_YouTube link coming soon_
 
 ## Why I built it
 
-Three things converged:
-
-1. I wanted to actually learn Go, not just do tutorials. I needed a project with real concurrency, WebSockets, and an HTTP server that does something meaningful.
+1. I wanted to learn Go, not just do tutorials. I needed a project with real concurrency, WebSockets, and an HTTP server that does something meaningful.
 2. I'm currently taking Computer Networks. Building Seminar made a lot of the course material click. WebSocket handshakes, TCP, chunked transfer encoding for SSE, the WebRTC signaling exchange - I implemented all of it, not just read about it.
 3. I think most AI study tools are designed for one person. This one is built around the idea that thinking with other people, with an AI asking questions in the background, is a fundamentally different experience.
 
@@ -89,7 +88,7 @@ In Chrome: go to `chrome://extensions`, enable Developer mode, click Load unpack
 
 ## How I used AI
 
-All technical decisions, system design, and feature ideas are mine. I designed the architecture, defined the data models, wrote the phase-by-phase feature specs, and made every call about what to build and how. Claude Code translated those decisions into working Go and TypeScript.
+All technical decisions, system design, and feature ideas are mine. I designed the architecture, defined the data models, wrote the phase-by-phase feature specs, and made every call about what to build and how. Claude Code translated those decisions into working Go and TypeScript. I reviewed, tested, and debugged everything, and decided what to change when things did not work.
 
 ---
 
