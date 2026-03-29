@@ -91,6 +91,17 @@ func (c *Client) ReadPump() {
 			}
 		}
 
+		// Persist chat messages to Redis so session history survives restarts.
+		if env.Type == "chat" {
+			var cp struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}
+			if json.Unmarshal(env.Payload, &cp) == nil && cp.Content != "" {
+				c.session.AddChatMessage(c.ID, cp.Role, cp.Content)
+			}
+		}
+
 		// Mode changes are handled server-side; don't broadcast the raw message.
 		if env.Type == "set_mode" {
 			var mp struct {

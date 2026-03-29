@@ -13,6 +13,10 @@ export type WsMessageType =
   | 'rtc_offer'
   | 'rtc_answer'
   | 'rtc_ice'
+  | 'thread_new'
+  | 'thread_update'
+  | 'divergence'
+  | 'session_ended'
 
 export type SessionMode = 'close-reading' | 'debate-prep' | 'exam-review'
 
@@ -61,6 +65,31 @@ export interface HighlightPayload extends RangeData {
 export interface ChatPayload {
   role: 'user' | 'assistant'
   content: string
+}
+
+// ── Threads (Phase 11) ───────────────────────────────────────────────────────
+
+export interface Reply {
+  id: string
+  threadId: string
+  authorId: string
+  content: string
+  isAI: boolean
+  createdAt: string
+}
+
+export interface Thread {
+  id: string
+  sessionId: string
+  anchorText: string
+  anchorRange: string // serialized RangeData JSON
+  authorId: string
+  question: string
+  createdAt: string
+}
+
+export interface ThreadWithReplies extends Thread {
+  replies: Reply[]
 }
 
 // ── Background ↔ Content messages ────────────────────────────────────────────
