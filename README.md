@@ -3,7 +3,9 @@
 A Chrome extension for collaborative reading with a Socratic AI. Built for college study groups.
 
 ## Demo
-_YouTube link coming soon_
+https://www.youtube.com/watch?v=eEhIPIxRm3w
+
+Note: the demo is on a webpage, but the extension also works on PDFs. 
 
 ## Why I built it
 
@@ -50,7 +52,6 @@ A few things happen automatically as the session runs:
 | Real-time | WebSocket hub, WebRTC P2P data channels |
 | AI | Anthropic Claude API (streaming SSE) |
 | Persistence | Redis |
-| Speech | Whisper via Anthropic transcription API |
 
 ---
 
