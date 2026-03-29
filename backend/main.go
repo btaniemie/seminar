@@ -8,10 +8,11 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/seminar/backend/handlers"
 	"github.com/seminar/backend/hub"
+	"github.com/seminar/backend/store"
 )
 
 func main() {
-	// Load .env if present — silently ignored in production where env vars are set directly
+	// Load .env if present — silently ignored in production where env vars are set directly.
 	if err := godotenv.Load(); err == nil {
 		log.Println("loaded .env")
 	}
@@ -21,13 +22,19 @@ func main() {
 		port = "8080"
 	}
 
-	h := hub.NewHub()
-	hub.LoadSessions(h) // restore persisted sessions from disk
+	st := store.New()
+	h := hub.NewHub(st)
+	hub.HydrateFromRedis(h, st) // restore persisted sessions from Redis
 
-	sessionHandler := handlers.NewSessionHandler(h)
+	sessionHandler := handlers.NewSessionHandler(h, st)
 	wsHandler := handlers.NewWSHandler(h)
 	chatHandler := handlers.NewChatHandler(h)
 	transcribeHandler := handlers.NewTranscribeHandler()
+	threadHandler := handlers.NewThreadHandler(h, st)
+	briefingHandler := handlers.NewBriefingHandler()
+	divergenceChecker := handlers.NewDivergenceChecker(st, h)
+	h.SetDivergenceFunc(divergenceChecker.Check)
+	comprehensionHandler := handlers.NewComprehensionHandler(st, h)
 
 	mux := http.NewServeMux()
 
@@ -36,6 +43,14 @@ func main() {
 	mux.HandleFunc("GET /api/session/{id}", sessionHandler.GetSession)
 	mux.HandleFunc("POST /api/chat", chatHandler.Chat)
 	mux.HandleFunc("POST /api/transcribe", transcribeHandler.Transcribe)
+	mux.HandleFunc("POST /api/briefing", briefingHandler.Briefing)
+	mux.HandleFunc("POST /api/comprehension", comprehensionHandler.Comprehension)
+
+	// Thread endpoints (Phase 11)
+	mux.HandleFunc("POST /api/threads", threadHandler.Create)
+	mux.HandleFunc("POST /api/threads/{id}/reply", threadHandler.AddReply)
+	mux.HandleFunc("POST /api/threads/{id}/ask", threadHandler.AskAI)
+	mux.HandleFunc("GET /api/threads/{sessionId}", threadHandler.GetBySession)
 
 	// WebSocket endpoint
 	mux.HandleFunc("GET /ws", wsHandler.ServeWS)

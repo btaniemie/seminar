@@ -1,9 +1,14 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"sync"
+	"time"
+
+	"github.com/seminar/backend/store"
 )
 
 // PresenceUser is the per-user data broadcast in presence events.
@@ -44,17 +49,22 @@ type Session struct {
 	clients      map[*Client]bool
 	clientsByID  map[string]*Client // guarded by run() goroutine only
 	broadcast    chan []byte
-	direct       chan DirectMsg     // for targeted WebRTC signaling messages
+	direct       chan DirectMsg // for targeted WebRTC signaling messages
 	join         chan *Client
 	leave        chan *Client
 	nextColorIdx int              // guarded by mu; incremented on each client join
 	highlightBuf []HighlightEntry // rolling buffer of last 10 highlights; guarded by mu
 	mode         string           // "close-reading" | "debate-prep" | "exam-review"; guarded by mu
 	hostID       string           // clientId of first joiner; guarded by mu
+	createdAt    time.Time        // set once at creation; guarded by mu
+
+	store     *store.Store              // Redis persistence
+	persistCh chan func(context.Context) // buffered channel for non-blocking Redis writes
+	hub       *Hub                      // back-reference for divergence fn lookup
 }
 
-func newSession(id string) *Session {
-	return &Session{
+func newSession(id string, st *store.Store, h *Hub) *Session {
+	s := &Session{
 		id:          id,
 		clients:     make(map[*Client]bool),
 		clientsByID: make(map[string]*Client),
@@ -62,7 +72,64 @@ func newSession(id string) *Session {
 		direct:      make(chan DirectMsg, 256),
 		join:        make(chan *Client),
 		leave:       make(chan *Client),
+		createdAt:   time.Now(),
+		store:       st,
+		persistCh:   make(chan func(context.Context), 64),
+		hub:         h,
 	}
+	go s.runPersist()
+	return s
+}
+
+// runPersist drains the persistCh and executes each Redis write sequentially.
+// Runs in its own goroutine for the lifetime of the session — never blocks the WS handlers.
+func (s *Session) runPersist() {
+	for fn := range s.persistCh {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		fn(ctx)
+		cancel()
+	}
+}
+
+// enqueue submits a Redis write to the persist goroutine without blocking.
+// Drops the write and logs a warning if the channel is full.
+func (s *Session) enqueue(fn func(context.Context)) {
+	select {
+	case s.persistCh <- fn:
+	default:
+		slog.Warn("persist queue full, dropping Redis write", "session", s.id)
+	}
+}
+
+// enqueueMeta persists transient scalar state (mode, hostID) so it survives a server restart.
+func (s *Session) enqueueMeta() {
+	s.mu.RLock()
+	meta := store.SessionMeta{
+		Mode:        s.mode,
+		OwnerUserID: s.hostID,
+		CreatedAt:   s.createdAt,
+		UpdatedAt:   time.Now(),
+	}
+	id := s.id
+	s.mu.RUnlock()
+
+	st := s.store
+	s.enqueue(func(ctx context.Context) {
+		if err := st.SaveMeta(ctx, id, meta); err != nil {
+			slog.Error("redis SaveMeta failed", "session", id, "err", err)
+		}
+	})
+}
+
+func (s *Session) enqueueHighlight(entry store.HighlightEntry) {
+	id := s.id
+	st := s.store
+	s.enqueue(func(ctx context.Context) {
+		if err := st.PushHighlight(ctx, id, entry); err != nil {
+			slog.Error("redis PushHighlight failed", "session", id, "err", err)
+		}
+	})
+	s.enqueueMeta()
 }
 
 // SendToClient routes a message directly to a single client by its ID.
@@ -82,20 +149,32 @@ func (s *Session) NextColor() string {
 	return color
 }
 
-// AddHighlight appends a highlight to the session's rolling buffer (capped at maxHighlightBuf).
-// Thread-safe — called from client ReadPump goroutines.
+// AddHighlight is thread-safe — called from client ReadPump goroutines.
 func (s *Session) AddHighlight(clientID, initials, text string) {
+	entry := HighlightEntry{ClientID: clientID, Initials: initials, Text: text}
+
 	s.mu.Lock()
-	s.highlightBuf = append(s.highlightBuf, HighlightEntry{
+	s.highlightBuf = append(s.highlightBuf, entry)
+	if len(s.highlightBuf) > maxHighlightBuf {
+		s.highlightBuf = s.highlightBuf[len(s.highlightBuf)-maxHighlightBuf:]
+	}
+	// Snapshot for the divergence checker before releasing the lock.
+	all := make([]HighlightEntry, len(s.highlightBuf))
+	copy(all, s.highlightBuf)
+	s.mu.Unlock()
+
+	s.enqueueHighlight(store.HighlightEntry{
 		ClientID: clientID,
 		Initials: initials,
 		Text:     text,
 	})
-	if len(s.highlightBuf) > maxHighlightBuf {
-		s.highlightBuf = s.highlightBuf[len(s.highlightBuf)-maxHighlightBuf:]
+
+	// Fire divergence check in its own goroutine so it never blocks the WS path.
+	if s.hub != nil {
+		if fn := s.hub.DivergenceFn(); fn != nil {
+			go fn(s.id, all, entry)
+		}
 	}
-	s.mu.Unlock()
-	go s.persist()
 }
 
 // GetHighlights returns a copy of the current highlight buffer.
@@ -106,6 +185,24 @@ func (s *Session) GetHighlights() []HighlightEntry {
 	result := make([]HighlightEntry, len(s.highlightBuf))
 	copy(result, s.highlightBuf)
 	return result
+}
+
+// AddChatMessage enqueues a Redis write for a chat message.
+// Thread-safe — called from client ReadPump goroutines.
+func (s *Session) AddChatMessage(clientID, role, content string) {
+	msg := store.ChatMessage{
+		ClientID: clientID,
+		Role:     role,
+		Content:  content,
+		SentAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	id := s.id
+	st := s.store
+	s.enqueue(func(ctx context.Context) {
+		if err := st.PushChatMessage(ctx, id, msg); err != nil {
+			slog.Error("redis PushChatMessage failed", "session", id, "err", err)
+		}
+	})
 }
 
 // SetMode updates the session mode if the caller is the host, then fans the new mode out.
@@ -119,7 +216,7 @@ func (s *Session) SetMode(callerID, mode string) {
 	s.mode = mode
 	s.mu.Unlock()
 	s.broadcastModeUpdate()
-	go s.persist()
+	s.enqueueMeta()
 }
 
 // GetMode returns the current session mode.
@@ -134,6 +231,13 @@ func (s *Session) HostID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hostID
+}
+
+// CreatedAt returns the session creation time.
+func (s *Session) CreatedAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.createdAt
 }
 
 // broadcastModeUpdate fans out { type:"mode", payload:{mode,hostId} } via the broadcast channel.
@@ -188,7 +292,7 @@ func (s *Session) run() {
 			// Broadcast updated participant list and current mode to everyone.
 			s.presenceFanout()
 			s.modeFanout()
-			go s.persist()
+			s.enqueueMeta()
 
 		case c := <-s.leave:
 			s.mu.Lock()
